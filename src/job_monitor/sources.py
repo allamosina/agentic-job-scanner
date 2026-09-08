@@ -94,12 +94,47 @@ async def check_public_url(url: str):
     infos = await asyncio.to_thread(socket.getaddrinfo, parsed.hostname, parsed.port or 443)
     if not infos or any(not ipaddress.ip_address(i[4][0]).is_global for i in infos):
         raise ValueError("Private/local network address is not a vacancy source")
+    return infos[0][4][0]
+
+
+class PublicTransport(httpx.AsyncBaseTransport):
+    """Pin each connection to its checked IP; retain original HTTP Host and TLS SNI.
+
+    No keepalive: two distinct HTTPS origins can share an IP but must never reuse
+    a TLS connection under the IP-based pool key. The outer client still sees the
+    original hostname, including for cookies and redirect processing.
+    """
+
+    def __init__(self):
+        self.inner = httpx.AsyncHTTPTransport(
+            trust_env=False, limits=httpx.Limits(max_connections=10, max_keepalive_connections=0)
+        )
+
+    async def handle_async_request(self, request):
+        address = await check_public_url(str(request.url))
+        headers = request.headers.copy()
+        headers["Host"] = request.url.netloc.decode("ascii")
+        pinned = httpx.Request(
+            request.method,
+            request.url.copy_with(host=address),
+            headers=headers,
+            stream=request.stream,
+            extensions={**request.extensions, "sni_hostname": request.url.host},
+        )
+        return await self.inner.handle_async_request(pinned)
+
+    async def aclose(self):
+        await self.inner.aclose()
 
 
 class Web:
     def __init__(self):
         self.client = httpx.AsyncClient(
-            timeout=25, follow_redirects=False, headers={"User-Agent": "PersonalJobMonitor/0.1"}
+            timeout=25,
+            follow_redirects=False,
+            headers={"User-Agent": "PersonalJobMonitor/0.1"},
+            transport=PublicTransport(),
+            trust_env=False,
         )
         self.robots: dict[str, RobotFileParser] = {}
 

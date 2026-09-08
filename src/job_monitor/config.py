@@ -88,13 +88,13 @@ class Source(Strict):
 class Settings(Strict):
     private_config_json: str = Field(default="", repr=False)
     private_config_path: str = ""
-    database_url: str = ""
-    telegram_bot_token: str = ""
+    database_url: str = Field(default="", repr=False)
+    telegram_bot_token: str = Field(default="", repr=False)
     telegram_user_id: int = 0
     telegram_chat_id: int = 0
-    openai_api_key: str = ""
+    openai_api_key: str = Field(default="", repr=False)
     openai_model: str = ""
-    brave_api_key: str = ""
+    brave_api_key: str = Field(default="", repr=False)
     paid_apis_enabled: bool = False
     llm_calls_per_day: int = Field(default=0, ge=0)
     search_calls_per_day: int = Field(default=0, ge=0)
@@ -102,7 +102,7 @@ class Settings(Strict):
     config_path: str = "config/preferences.yaml"
     profile_path: str = "config/candidate.yaml"
     sources_path: str = "config/sources.yaml"
-    notion_api_key: str = ""
+    notion_api_key: str = Field(default="", repr=False)
     notion_sync_enabled: bool = False
     notion_config_path: str = "config/notion.yaml"
 

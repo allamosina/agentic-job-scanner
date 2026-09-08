@@ -9,3 +9,5 @@ Privacy checks cover complete private bundle loading, environment precedence, in
 Live OpenAI/Brave requests, real Telegram delivery and Railway deployment are not claimed by offline tests. Notion HTTP behavior is tested with mock transport; production authorization requires a separately configured integration.
 
 After private/public separation: 91 tests passed, including isolated PostgreSQL tests; Ruff passed. The private bundle was checked against the original four configuration files without printing their contents.
+
+Pre-publication security review: 97 tests passed; 31 locked dependencies checked by pip-audit with no known vulnerabilities or skipped packages. Live public HTTPS smoke check passed after DNS-pinning changes. Review scope and operational limits are recorded in SECURITY.md.
