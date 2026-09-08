@@ -1,0 +1,12 @@
+# SYNTHETIC EXAMPLE — configure PRIVATE_CONFIG_JSON or PRIVATE_CONFIG_PATH for real use.
+canonical_document: Fictional example profile
+documents:
+- document: Fictional example profile
+  canonical: true
+  text: A fictional candidate who managed a website roadmap at Example Company.
+evidence:
+- id: cv-1
+  text: Managed a website roadmap at Example Company.
+  source: Fictional example profile
+notes:
+- Synthetic data for demonstration, not the author’s CV.

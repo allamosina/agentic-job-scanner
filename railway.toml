@@ -1,0 +1,8 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+[deploy]
+# Bot service. For worker override start command: job-monitor scan
+startCommand = "job-monitor bot"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5

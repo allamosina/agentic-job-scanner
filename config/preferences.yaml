@@ -1,0 +1,37 @@
+# SYNTHETIC EXAMPLE — configure PRIVATE_CONFIG_JSON or PRIVATE_CONFIG_PATH for real use.
+version: demo-1
+schedule:
+  timezone: Europe/Prague
+  delivery_times:
+  - 08:00
+  - '13:00'
+  - '18:00'
+policy_text: DEMONSTRATION ONLY. Fictional web project manager looking for website
+  delivery roles. Assess evidence against responsibilities; do not invent experience.
+clarifications_text: Synthetic example, not a real candidate or job search.
+weights:
+  responsibility: 40
+  seniority: 15
+  employment: 15
+  compensation: 10
+  company: 10
+  freshness: 10
+compensation_czk:
+  high_min: 90000
+  medium_min: 60000
+  recent_base: 70000
+watchlists: {}
+discovery_queries: []
+operations:
+  source_interval_hours:
+    '1': 4
+    '2': 24
+    '3': 168
+  max_pages_per_source: 5
+  max_evaluations_per_run: 25
+  scan_timeout_seconds: 1200
+  source_timeout_seconds: 45
+  max_cards_per_slot: 5
+  research_ttl_hours: 168
+  search_sources_per_run: 6
+  outbound_companies_per_run: 1

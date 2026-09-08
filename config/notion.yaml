@@ -1,0 +1,53 @@
+# SYNTHETIC EXAMPLE — configure PRIVATE_CONFIG_JSON or PRIVATE_CONFIG_PATH for real use.
+data_source_id: 00000000-0000-0000-0000-000000000000
+database_url: https://www.notion.so/00000000000000000000000000000000
+api_version: '2026-03-11'
+properties:
+  company: Company
+  description: Job description
+  status: Status
+  date: Date
+  channel: Type
+  comment: Comment
+statuses:
+  Not started:
+    applied: false
+    outcome: not_started
+    stage: null
+  Applied:
+    applied: true
+    outcome: pending
+    stage: 0
+  HR interview scheduled:
+    applied: true
+    outcome: pending
+    stage: 1
+  HR interview happened:
+    applied: true
+    outcome: pending
+    stage: 2
+  Manager interviewes scheduled:
+    applied: true
+    outcome: pending
+    stage: 3
+  Manager interview happened:
+    applied: true
+    outcome: pending
+    stage: 3
+  Next rounds in progress:
+    applied: true
+    outcome: pending
+    stage: 4
+  Offered:
+    applied: true
+    outcome: offered
+    stage: 5
+  Rejected:
+    applied: true
+    outcome: rejected
+    stage: null
+max_stale_hours: 36
+retry_minutes: 30
+learning_min_resolved: 5
+learning_max_adjustment: 2.0
+track_overrides: {}
