@@ -146,6 +146,7 @@ async def evaluate_pending(factory, settings, preferences, web):
         ]
     pending.sort(key=lambda pair: (discovery_priority(pair[0].title), pair[0].first_seen))
     completed, failed = 0, 0
+    evaluation_state = "complete"
     for job, version in pending[: preferences.operations.max_evaluations_per_run]:
         research = []
         try:
@@ -171,11 +172,13 @@ async def evaluate_pending(factory, settings, preferences, web):
                 )
             completed += 1
         except BudgetUnavailable:
+            evaluation_state = "budget_exhausted"
             break
         except Exception as exc:
             failed += 1
             log.warning("evaluation deferred job=%s error=%s", job.id, type(exc).__name__)
-    return {"evaluated": completed, "evaluation_errors": failed, "pending_before_run": len(pending)}
+    return {"evaluated": completed, "evaluation_errors": failed, "pending_before_run": len(pending),
+            "evaluation_state": evaluation_state}
 
 
 def watchlist_sources(preferences, configured):

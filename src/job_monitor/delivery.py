@@ -98,6 +98,21 @@ def summary(session):
     )
 
 
+def manual_digest_text(count, notion_problem):
+    if notion_problem:
+        return "Подборка задержана: нужно обновить отклики из Notion, чтобы не предложить уже поданные вакансии."
+    if count:
+        return (
+            f"Выбрано новых вакансий: {count}. Карточки отправляются после проверки актуальности. "
+            "На каждой можно отметить интерес, сохранить её или указать, что уже откликнулась."
+        )
+    return (
+        "Новых готовых рекомендаций сейчас нет: подходящие карточки ещё не подготовлены "
+        "или уже были отправлены. Это не означает, что все собранные вакансии проверены. "
+        "Отправь /scan, чтобы запустить поиск и анализ в пределах дневного лимита API."
+    )
+
+
 def build_queue(factory, settings, preferences, slot):
     with transaction_lock(factory, "digest:" + str(settings.telegram_chat_id)) as session:
         if session is None:
@@ -245,7 +260,8 @@ def build_queue(factory, settings, preferences, slot):
                 slot=slot,
                 kind="summary",
                 buttons=[],
-                body=f"Подборка {slot} Europe/Prague\nНовых подходящих карточек: {count}.\n"
+                body=(manual_digest_text(count, notion_problem) if slot.startswith("manual:") else
+                f"Подборка {slot} Europe/Prague\nНовых подходящих карточек: {count}.\n"
                 + summary(session)
                 + "\n"
                 + (notion_problem or "")
@@ -261,7 +277,7 @@ def build_queue(factory, settings, preferences, slot):
                     if settings.notion_sync_enabled
                     else "\nNotion: синхронизация выключена."
                 )
-                + "\n/apps — этапы и результаты откликов.",
+                + "\n/apps — этапы и результаты откликов."),
             )
         )
 

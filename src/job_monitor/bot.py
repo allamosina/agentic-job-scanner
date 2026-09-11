@@ -1,7 +1,7 @@
 import logging
 
 from sqlalchemy import select
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
 from .applications import report_text, sync_notion
@@ -21,6 +21,17 @@ REASONS = {
     "contract": "Оформление",
 }
 
+BOT_COMMANDS = [
+    ("jobs", "Получить новые подходящие вакансии сейчас"),
+    ("scan", "Запустить поиск и прислать подборку"),
+    ("status", "Технический статус"),
+    ("saved", "Сохранённые вакансии"),
+    ("preferences", "Правила поиска"),
+    ("apps", "Отклики в Notion"),
+    ("pause", "Приостановить рассылки"),
+    ("resume", "Возобновить рассылки"),
+]
+
 
 def build_bot(factory, settings):
     if not all([settings.telegram_bot_token, settings.telegram_user_id, settings.telegram_chat_id]):
@@ -39,11 +50,80 @@ def build_bot(factory, settings):
             return
         await update.message.reply_text(
             "Монитор вакансий. Подборки в 08:00, 13:00 и 18:00 по Праге.\n"
+            "/jobs — прислать новые подходящие вакансии сейчас\n"
+            "/scan — запустить поиск и прислать подборку (использует лимит API)\n"
             "/status — источники и очередь\n/preferences — правила и реакции\n/saved — сохранённые\n"
             "/pause и /resume — рассылки\n/reset_learning — сброс влияния реакций\n"
             "/apps — Notion: этапы откликов и результаты\n"
             "Комментарий к вакансии можно отправить ответом на её карточку."
         )
+
+    async def deliver_now(update, context):
+        prefs = load_preferences(settings)
+        # A repeated Telegram update cannot create a second digest for the same request.
+        slot = f"manual:{update.effective_chat.id}:{update.message.message_id}"
+        build_queue(factory, settings, prefs, slot)
+        web = Web()
+        try:
+            await dispatch(factory, context.bot, web, settings)
+        finally:
+            await web.close()
+
+    async def manual_work(update, context, search):
+        try:
+            if search:
+                from .worker import scan
+
+                result = await scan(factory, settings)
+                if result.get("state") == "already_running":
+                    await update.message.reply_text("Поиск уже выполняется. Готовые вакансии доступны через /jobs.")
+                    return
+                notes = ["Поиск завершён." if result.get("state") != "deadline_reached_partial"
+                         else "Поиск завершён частично: достигнут лимит времени."]
+                if "evaluated" in result:
+                    notes.append(f"Новых оценок: {result['evaluated']}.")
+                if result.get("evaluation_state") == "disabled":
+                    notes.append("AI-анализ выключен или не настроены ключ и модель.")
+                if result.get("evaluation_state") == "waiting_for_notion":
+                    notes.append("Анализ ждёт обновления откликов из Notion.")
+                if result.get("evaluation_state") == "budget_exhausted":
+                    notes.append("Дневной лимит запросов API исчерпан; оставшиеся вакансии ждут анализа.")
+                if result.get("evaluation_errors"):
+                    notes.append("Часть вакансий не удалось оценить из-за ошибок API.")
+                await update.message.reply_text(" ".join(notes))
+            await deliver_now(update, context)
+        except Exception as exc:
+            log.error("manual job request failed: %s", type(exc).__name__)
+            await update.message.reply_text(
+                "Не удалось завершить запрос. Результаты, уже сохранённые в базе, не потеряны. "
+                "Причину нужно проверить в Deploy Logs."
+            )
+        finally:
+            context.application.bot_data["manual_busy"] = False
+
+    async def request_jobs(update, context):
+        if not authorized(update):
+            return
+        if context.application.bot_data.get("manual_busy"):
+            await update.message.reply_text("Предыдущий запрос ещё выполняется. Я пришлю результат сюда.")
+            return
+        with factory() as session:
+            paused = session.get(State, "paused")
+            if paused and paused.value.get("enabled"):
+                await update.message.reply_text("Рассылки на паузе. Отправь /resume, затем повтори команду.")
+                return
+        search = update.message.text.split()[0].split("@")[0] == "/scan"
+        context.application.bot_data["manual_busy"] = True
+        try:
+            await update.message.reply_text(
+                "Запускаю поиск и анализ в пределах дневного лимита API. Это может занять несколько минут; "
+                "результат пришлю сюда."
+                if search else "Проверяю готовые вакансии и присылаю новые подходящие карточки."
+            )
+            context.application.create_task(manual_work(update, context, search), update=update)
+        except Exception:
+            context.application.bot_data["manual_busy"] = False
+            raise
 
     async def status(update, context):
         if not authorized(update):
@@ -242,6 +322,10 @@ def build_bot(factory, settings):
 
     async def init(application):
         application.bot_data["web"] = Web()
+        try:
+            await application.bot.set_my_commands([BotCommand(name, text) for name, text in BOT_COMMANDS])
+        except Exception as exc:
+            log.warning("Telegram command menu unavailable: %s", type(exc).__name__)
         # Daily local-date gate is persisted in PostgreSQL; restarts do not re-import repeatedly.
         # The scan worker shares this lock/gate. Failed attempts retry at most every 30 min.
         application.job_queue.run_repeating(
@@ -266,6 +350,8 @@ def build_bot(factory, settings):
     )
     for name, handler in [
         ("start", start),
+        ("jobs", request_jobs),
+        ("scan", request_jobs),
         ("status", status),
         ("preferences", preferences),
         ("pause", toggle),

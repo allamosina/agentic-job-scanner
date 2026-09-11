@@ -46,7 +46,7 @@ job-monitor scan
 job-monitor bot
 ```
 
-Telegram commands: `/status`, `/preferences`, `/saved`, `/apps`, `/pause`, `/resume`, `/reset_learning`. Private preferences are shown only in the authorized Telegram chat. `/reset_learning` resets rating influence, not application history.
+Telegram commands: `/jobs` sends new eligible cards immediately using the existing evaluation, application exclusions, deduplication and live verification; `/scan` runs a background scan within existing API caps and sends the resulting digest. Both require the authorized user/chat and respect pause. A second manual request is refused while the first is running; the bot remains available. No separate scanner service is needed for manual tests. The bot registers its command menu at startup. `/status` remains technical diagnostics. Other commands: `/preferences`, `/saved`, `/apps`, `/pause`, `/resume`, `/reset_learning`. Private preferences are shown only in the authorized Telegram chat. `/reset_learning` resets rating influence, not application history.
 
 ## Railway
 
