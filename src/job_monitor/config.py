@@ -87,6 +87,10 @@ class Source(Strict):
 
 class Settings(Strict):
     private_config_json: str = Field(default="", repr=False)
+    private_config_json_1: str = Field(default="", repr=False)
+    private_config_json_2: str = Field(default="", repr=False)
+    private_config_json_3: str = Field(default="", repr=False)
+    private_config_json_4: str = Field(default="", repr=False)
     private_config_path: str = ""
     database_url: str = Field(default="", repr=False)
     telegram_bot_token: str = Field(default="", repr=False)
@@ -117,16 +121,34 @@ class Settings(Strict):
         if not self.database_url.startswith(("postgresql://", "postgresql+psycopg://", "postgres://")):
             raise ValueError("DATABASE_URL must point to PostgreSQL; configure .env")
 
+    @property
+    def private_config_parts(self):
+        return [getattr(self, f"private_config_json_{i}") for i in range(1, 5)]
+
+    @property
+    def has_private_config(self):
+        return bool(self.private_config_json or self.private_config_path or any(self.private_config_parts))
+
 
 def read_yaml(path: str):
     return yaml.safe_load(Path(path).read_text(encoding="utf-8"))
 
 
 def config_section(settings: Settings, section: str, fallback_path: str):
-    if not settings.private_config_json and not settings.private_config_path:
+    if not settings.has_private_config:
         return read_yaml(fallback_path)
     try:
-        raw = settings.private_config_json or Path(settings.private_config_path).read_text(encoding="utf-8")
+        parts = settings.private_config_parts
+        if any(parts):
+            # Reject ambiguous configuration and missing parts; never fall back to public defaults.
+            if settings.private_config_json:
+                raise ValueError("Conflicting configuration")
+            last = max(i for i, part in enumerate(parts) if part)
+            if not all(parts[:last + 1]):
+                raise ValueError("Missing configuration part")
+            raw = "".join(parts)
+        else:
+            raw = settings.private_config_json or Path(settings.private_config_path).read_text(encoding="utf-8")
         bundle = json.loads(raw)
         required = {"preferences", "candidate", "sources", "notion"}
         if not isinstance(bundle, dict) or set(bundle) != required:

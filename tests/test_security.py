@@ -20,6 +20,10 @@ def test_secrets_not_exposed_by_settings_repr():
                 "brave_api_key",
                 "notion_api_key",
                 "private_config_json",
+                "private_config_json_1",
+                "private_config_json_2",
+                "private_config_json_3",
+                "private_config_json_4",
             )
         }
     )

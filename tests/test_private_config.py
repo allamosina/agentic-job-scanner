@@ -53,6 +53,36 @@ def test_missing_private_file_does_not_fall_back(tmp_path):
         load_profile(Settings(private_config_path=str(tmp_path / "missing.json")))
 
 
+def test_large_split_bundle_from_environment(monkeypatch):
+    bundle = sample_bundle()
+    bundle["candidate"]["canonical_document"] = "Private synthetic profile " * 2500
+    raw = json.dumps(bundle, ensure_ascii=True)
+    parts = [raw[i:i + 24000] for i in range(0, len(raw), 24000)]
+    monkeypatch.setenv("PRIVATE_CONFIG_JSON", "")
+    monkeypatch.setenv("PRIVATE_CONFIG_PATH", "/missing/local/config.json")
+    for i in range(1, 5):
+        monkeypatch.setenv(f"PRIVATE_CONFIG_JSON_{i}", parts[i - 1] if i <= len(parts) else "")
+    settings = Settings.from_env()
+    assert settings.has_private_config
+    assert load_profile(settings) == bundle["candidate"]
+    assert load_preferences(settings) == load_preferences(Settings(private_config_json=raw))
+    assert load_sources(settings) == []
+    assert load_notion(settings) == load_notion(Settings(private_config_json=raw))
+    assert "Private synthetic profile" not in repr(settings)
+
+
+@pytest.mark.parametrize("parts", [
+    {"private_config_json_2": "secret"},
+    {"private_config_json_1": "secret", "private_config_json_3": "secret"},
+    {"private_config_json_1": '{"candidate":'},
+    {"private_config_json_1": "secret", "private_config_json": "{}"},
+])
+def test_invalid_parts_do_not_fall_back_or_echo_contents(parts):
+    with pytest.raises(ValueError) as caught:
+        load_profile(Settings(**parts))
+    assert str(caught.value) == "Private configuration is missing or invalid; contents omitted"
+
+
 def test_public_examples_are_synthetic_and_have_no_sources():
     settings = Settings()
     assert load_profile(settings)["canonical_document"] == "Fictional example profile"

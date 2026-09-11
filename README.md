@@ -18,6 +18,7 @@ Use one complete JSON bundle with four objects: `preferences`, `candidate`, `sou
 
 - Local: keep the bundle in `.private/config.json`, set `PRIVATE_CONFIG_PATH=.private/config.json` in ignored `.env`.
 - Railway: set **PRIVATE_CONFIG_JSON** to the complete JSON value in Variables on both bot and scanner services. Do not set the local file path there. Railway supports multiline values; see [Using Variables](https://docs.railway.com/variables). Use the New Variable value field for the bundle; the Raw Editor expects a map of environment variable names to values.
+- Large Railway bundles: if a value exceeds 32768 characters, split the serialized JSON into consecutive chunks below that limit and set **PRIVATE_CONFIG_JSON_1**, **PRIVATE_CONFIG_JSON_2**, etc. (up to four). The application joins them verbatim in numeric order before parsing; individual chunks are not standalone JSON. Remove the unsuffixed **PRIVATE_CONFIG_JSON**, leave unused trailing parts unset, and configure the same parts on both services. Do not add quotes, separators, or newlines between chunks. Numbered parts override a local file; missing parts, invalid JSON, and mixing numbered parts with the unsuffixed variable are rejected without exposing contents. Store any generated part files only in the ignored `.private/` directory.
 - Environment JSON takes priority over the private file. An invalid private bundle fails; the app does not silently fall back to demo data.
 - Keep API tokens and `DATABASE_URL` in separate environment variables listed in `.env.example`.
 

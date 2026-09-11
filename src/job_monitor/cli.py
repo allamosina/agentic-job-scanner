@@ -46,10 +46,8 @@ def main():
     from .applications import load_notion
 
     load_notion(settings)
-    if args.command in {"bot", "scan", "outbound", "notion-sync"} and not (
-        settings.private_config_json or settings.private_config_path
-    ):
-        raise ValueError("Configure PRIVATE_CONFIG_JSON or PRIVATE_CONFIG_PATH before running services")
+    if args.command in {"bot", "scan", "outbound", "notion-sync"} and not settings.has_private_config:
+        raise ValueError("Configure PRIVATE_CONFIG_JSON, its numbered parts, or PRIVATE_CONFIG_PATH")
     if args.command == "scan" and args.scheduled:
         from datetime import datetime, timedelta
         from zoneinfo import ZoneInfo
@@ -113,6 +111,10 @@ def main():
             key: bool(getattr(settings, key))
             for key in [
                 "private_config_json",
+                "private_config_json_1",
+                "private_config_json_2",
+                "private_config_json_3",
+                "private_config_json_4",
                 "private_config_path",
                 "database_url",
                 "telegram_bot_token",
