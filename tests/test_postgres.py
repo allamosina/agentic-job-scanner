@@ -135,7 +135,7 @@ async def test_ambiguous_send_is_not_retried(factory, job_data, assessment, sett
     await dispatch(factory, bot, WebOK())
     assert bot.calls == calls
     with factory() as session:
-        assert set(session.scalars(select(Delivery.status))) == {"unknown"}
+        assert set(session.scalars(select(Delivery.status))) == {"unknown", "suppressed"}
 
 
 async def test_closed_job_not_sent(factory, job_data, assessment, settings, preferences):
@@ -155,7 +155,7 @@ async def test_closed_job_not_sent(factory, job_data, assessment, settings, pref
 
     bot = Bot()
     await dispatch(factory, bot, Closed())
-    assert len(bot.messages) == 1  # audit summary only
+    assert len(bot.messages) == 0  # Closed jobs and scheduled reports stay silent.
     with factory() as session:
         assert session.scalar(select(Job.active)) is False
 

@@ -260,24 +260,9 @@ def build_queue(factory, settings, preferences, slot):
                 slot=slot,
                 kind="summary",
                 buttons=[],
-                body=(manual_digest_text(count, notion_problem) if slot.startswith("manual:") else
-                f"Подборка {slot} Europe/Prague\nНовых подходящих карточек: {count}.\n"
-                + summary(session)
-                + "\n"
-                + (notion_problem or "")
-                + (
-                    "\nNotion: "
-                    + str(
-                        (
-                            session.get(State, "notion_sync").value
-                            if session.get(State, "notion_sync")
-                            else {}
-                        ).get("status", "не синхронизирован")
-                    )
-                    if settings.notion_sync_enabled
-                    else "\nNotion: синхронизация выключена."
-                )
-                + "\n/apps — этапы и результаты откликов."),
+                # Keep the slot marker for idempotency, but scheduled reports are never sent.
+                status="pending" if slot.startswith("manual:") else "suppressed",
+                body=manual_digest_text(count, notion_problem) if slot.startswith("manual:") else "",
             )
         )
 
@@ -315,6 +300,10 @@ async def dispatch(factory, bot, web, settings=None):
             )
             if delivery is None:
                 return
+            # Also suppress reports queued by versions deployed before this change.
+            if delivery.kind == "summary" and not delivery.slot.startswith("manual:"):
+                delivery.status = "suppressed"
+                continue
             if delivery.version_id:
                 version = session.get(Version, delivery.version_id)
                 job = session.get(Job, version.job_id)
