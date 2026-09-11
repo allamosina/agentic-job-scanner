@@ -83,6 +83,35 @@ def test_invalid_parts_do_not_fall_back_or_echo_contents(parts):
     assert str(caught.value) == "Private configuration is missing or invalid; contents omitted"
 
 
+def test_cli_private_error_is_actionable_without_exposing_input(monkeypatch, capsys):
+    from job_monitor import cli
+
+    def fail():
+        load_profile(Settings(private_config_json_1="private-sensitive-marker", private_config_json="{}"))
+
+    monkeypatch.setattr(cli, "main", fail)
+    with pytest.raises(SystemExit) as caught:
+        cli.run()
+    output = capsys.readouterr().err
+    assert caught.value.code == 1
+    assert "Remove PRIVATE_CONFIG_JSON" in output
+    assert "private-sensitive-marker" not in output
+
+
+def test_cli_unexpected_error_remains_redacted(monkeypatch, capsys):
+    from job_monitor import cli
+
+    def fail():
+        raise ValueError("private-sensitive-marker")
+
+    monkeypatch.setattr(cli, "main", fail)
+    with pytest.raises(SystemExit):
+        cli.run()
+    output = capsys.readouterr().err
+    assert "ValueError" in output
+    assert "private-sensitive-marker" not in output
+
+
 def test_public_examples_are_synthetic_and_have_no_sources():
     settings = Settings()
     assert load_profile(settings)["canonical_document"] == "Fictional example profile"

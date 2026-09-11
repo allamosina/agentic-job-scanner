@@ -16,6 +16,12 @@ class Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
 
+class PrivateConfigError(ValueError):
+    def __init__(self, code):
+        super().__init__("Private configuration is missing or invalid; contents omitted")
+        self.code = code
+
+
 class Schedule(Strict):
     timezone: str
     delivery_times: list[str]
@@ -142,22 +148,28 @@ def config_section(settings: Settings, section: str, fallback_path: str):
         if any(parts):
             # Reject ambiguous configuration and missing parts; never fall back to public defaults.
             if settings.private_config_json:
-                raise ValueError("Conflicting configuration")
+                raise PrivateConfigError("conflicting_variables")
             last = max(i for i, part in enumerate(parts) if part)
             if not all(parts[:last + 1]):
-                raise ValueError("Missing configuration part")
+                raise PrivateConfigError("missing_part")
             raw = "".join(parts)
         else:
             raw = settings.private_config_json or Path(settings.private_config_path).read_text(encoding="utf-8")
         bundle = json.loads(raw)
         required = {"preferences", "candidate", "sources", "notion"}
         if not isinstance(bundle, dict) or set(bundle) != required:
-            raise ValueError("Invalid bundle")
+            raise PrivateConfigError("invalid_sections")
         if not all(isinstance(bundle[key], dict) for key in required):
-            raise ValueError("Invalid section")
+            raise PrivateConfigError("invalid_sections")
         return bundle[section]
+    except PrivateConfigError:
+        raise
+    except json.JSONDecodeError:
+        raise PrivateConfigError("invalid_json") from None
+    except OSError:
+        raise PrivateConfigError("unreadable_file") from None
     except (ValueError, TypeError, OSError):
-        raise ValueError("Private configuration is missing or invalid; contents omitted") from None
+        raise PrivateConfigError("invalid_sections") from None
 
 
 def load_profile(settings: Settings):

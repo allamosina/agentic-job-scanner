@@ -6,7 +6,13 @@ import sys
 
 from sqlalchemy import text
 
-from .config import Settings, fingerprint, load_preferences, load_profile, load_sources
+from .config import PrivateConfigError, Settings, fingerprint, load_preferences, load_profile, load_sources
+
+
+def startup_step(label, action):
+    # Labels are fixed in code. Never log exception text or configuration values.
+    print(f"Startup: {label}", file=sys.stderr, flush=True)
+    return action()
 
 
 def main():
@@ -39,13 +45,13 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
-    settings = Settings.from_env()
-    preferences = load_preferences(settings)
-    sources = load_sources(settings)
-    profile = load_profile(settings)
+    settings = startup_step("read environment variables", Settings.from_env)
+    preferences = startup_step("validate private preferences", lambda: load_preferences(settings))
+    sources = startup_step("validate private sources", lambda: load_sources(settings))
+    profile = startup_step("validate private candidate", lambda: load_profile(settings))
     from .applications import load_notion
 
-    load_notion(settings)
+    startup_step("validate private Notion configuration", lambda: load_notion(settings))
     if args.command in {"bot", "scan", "outbound", "notion-sync"} and not settings.has_private_config:
         raise ValueError("Configure PRIVATE_CONFIG_JSON, its numbered parts, or PRIVATE_CONFIG_PATH")
     if args.command == "scan" and args.scheduled:
@@ -151,7 +157,7 @@ def main():
         return
     from .db import database, sessions
 
-    engine = database(settings)
+    engine = startup_step("validate DATABASE_URL and initialize database driver", lambda: database(settings))
     factory = sessions(engine)
     try:
         if args.command == "doctor":
@@ -174,7 +180,8 @@ def main():
         elif args.command == "bot":
             from .bot import build_bot
 
-            build_bot(factory, settings).run_polling(drop_pending_updates=False)
+            bot = startup_step("validate Telegram token and IDs", lambda: build_bot(factory, settings))
+            startup_step("connect to Telegram and start polling", lambda: bot.run_polling(drop_pending_updates=False))
         elif args.command == "notion-sync":
             from .applications import sync_notion
 
@@ -213,6 +220,17 @@ def main():
 def run():
     try:
         main()
+    except PrivateConfigError as exc:
+        hints = {
+            "conflicting_variables": "Remove PRIVATE_CONFIG_JSON when using PRIVATE_CONFIG_JSON_1, _2, etc.",
+            "missing_part": "Private JSON parts must start at _1 with no gaps in numbering.",
+            "invalid_json": "Private JSON is incomplete or malformed. Recopy every part without added text.",
+            "invalid_sections": "Private JSON must contain preferences, candidate, sources and notion objects.",
+            "unreadable_file": "PRIVATE_CONFIG_PATH cannot be read. On Railway use the JSON variables instead.",
+        }
+        print("Configuration error: " + hints.get(exc.code, "Invalid private configuration.")
+              + " Values omitted.", file=sys.stderr)
+        sys.exit(1)
     except Exception as exc:
         print(
             f"Command failed ({type(exc).__name__}). Check configuration and service status; secrets omitted.",
