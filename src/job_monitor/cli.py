@@ -21,6 +21,8 @@ def main():
     sub.add_parser("check-config")
     sub.add_parser("doctor")
     sub.add_parser("migrate")
+    sub.add_parser("collect")
+    sub.add_parser("evaluate")
     sub.add_parser("bot")
     scan_parser = sub.add_parser("scan")
     scan_parser.add_argument("--force", action="store_true")
@@ -52,7 +54,7 @@ def main():
     from .applications import load_notion
 
     startup_step("validate private Notion configuration", lambda: load_notion(settings))
-    if args.command in {"bot", "scan", "outbound", "notion-sync"} and not settings.has_private_config:
+    if args.command in {"bot", "scan", "collect", "evaluate", "outbound", "notion-sync"} and not settings.has_private_config:
         raise ValueError("Configure PRIVATE_CONFIG_JSON, its numbered parts, or PRIVATE_CONFIG_PATH")
     if args.command == "scan" and args.scheduled:
         from datetime import datetime, timedelta
@@ -164,6 +166,11 @@ def main():
             with engine.connect() as connection:
                 connection.execute(text("SELECT 1"))
             print("PostgreSQL reachable")
+        elif args.command in {"collect", "evaluate"}:
+            from .worker import collect_jobs, evaluate_queue
+
+            action = collect_jobs if args.command == "collect" else evaluate_queue
+            print(json.dumps(asyncio.run(action(factory, settings)), ensure_ascii=False))
         elif args.command == "scan":
             from .worker import scan
 

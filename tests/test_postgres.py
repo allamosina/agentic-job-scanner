@@ -206,3 +206,38 @@ async def test_verification_failure_retries_later_without_sending_job(
         assert item.status == "pending"
         assert item.next_attempt_at > utcnow()
         assert item.verification_attempts == 1
+
+
+async def test_unchanged_evaluated_job_does_not_expire(factory, settings, preferences, job_data, assessment, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from job_monitor import compensation, worker
+
+    settings = settings.model_copy(update={'paid_apis_enabled': True, 'openai_api_key': 'synthetic'})
+    prepare(factory, job_data, assessment, settings, preferences)
+    with factory.begin() as session:
+        session.scalar(select(Evaluation)).created_at = utcnow() - timedelta(days=90)
+    assess = AsyncMock()
+    monkeypatch.setattr(worker, 'assess', assess)
+    monkeypatch.setattr(compensation, 'exchange_rates', AsyncMock(return_value=None))
+    result = await worker.evaluate_pending(factory, settings, preferences, None)
+    assert result['remaining'] == 0
+    assess.assert_not_called()
+
+
+async def test_failed_evaluation_waits_before_retry(factory, settings, preferences, job_data, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from job_monitor import compensation, worker
+
+    settings = settings.model_copy(update={'paid_apis_enabled': True, 'openai_api_key': 'synthetic'})
+    with factory.begin() as session:
+        save_job(session, job_data)
+    assess = AsyncMock(side_effect=ValueError('synthetic failure'))
+    monkeypatch.setattr(worker, 'assess', assess)
+    monkeypatch.setattr(worker, 'company_research', AsyncMock(return_value=[]))
+    monkeypatch.setattr(compensation, 'exchange_rates', AsyncMock(return_value=None))
+    result = await worker.evaluate_pending(factory, settings, preferences, None)
+    assert result['evaluation_errors'] == 1
+    await worker.evaluate_pending(factory, settings, preferences, None)
+    assess.assert_awaited_once()

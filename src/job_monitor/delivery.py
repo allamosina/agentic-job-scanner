@@ -6,11 +6,11 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, func, or_, select
 
-from .applications import blocked_job_ids, freshness_problem, outcome_report
+from .applications import blocked_job_ids, freshness_problem
 from .config import fingerprint, load_profile
 from .db import transaction_lock
 from .models import Delivery, Evaluation, Job, Run, Signal, State, Version, utcnow
-from .store import feedback_boost
+from .preferences import runtime_preferences
 
 
 def slot_now(now, schedule):
@@ -39,34 +39,28 @@ def material_change(previous, current):
 
 
 def card(job, version, evaluation):
-    r, j = evaluation.result, version.payload
-    parts = [
-        f"{job.company} — {job.title}",
-        f"{evaluation.score}/100 · {evaluation.category} · {r['track']}",
-        f"Локация: {job.location} | {j.get('remote_policy', 'Unknown')}",
-        f"Опубликовано: {j.get('posted_at') or 'неизвестно'}",
-        f"Найм из Чехии: {r['employment_feasibility']} · {r['employment_model']}",
-        f"Компенсация: {r['compensation_fit']} — {r['compensation_summary']}",
-        "Почему подходит:",
-    ]
-    parts += ["• " + x for x in r["why_it_fits"][:4]]
-    parts += ["Риски: " + "; ".join(r["gaps"]), "Действие: " + r["recommended_action"]]
-    if r.get("pmm"):
-        p = r["pmm"]
-        parts += [
-            "Переход в PMM: " + p["why_pmm_transition_is_credible"],
-            "Обязательный PMM-опыт: " + ("да" if p["hard_pmm_experience_required"] else "нет"),
-            "Потенциал кейса: " + p["case_study_potential"],
-            "Идея кейса: " + p["suggested_case_angle"],
-        ]
-    parts += [
-        "Источник: " + j["source_id"],
-        "Найдено: " + j["discovered_url"],
-        "Официальная вакансия: " + (job.official_url or "не подтверждена"),
-        job.canonical_url,
-    ]
-    # Buttons preserve links if unusually long text needs truncation.
-    return "\n".join(parts)[:3800]
+    r = evaluation.result
+    def short(value, limit):
+        value = " ".join(str(value).split())
+        return value if len(value) <= limit else value[:limit - 1].rsplit(" ", 1)[0] + "…"
+
+    verdict = {"HIGH": "Стоит рассмотреть", "MEDIUM": "Можно попробовать",
+               "STRETCH": "Возможен переход", "LOW": "Условное соответствие"}.get(
+                   evaluation.category, "Можно рассмотреть")
+    feasibility = {"CONFIRMED": "найм из Чехии подтверждён", "LIKELY": "найм из Чехии нужно уточнить",
+                   "UNKNOWN": "найм из Чехии не подтверждён"}.get(
+                       r.get("employment_feasibility"), "условия найма из Чехии нужно уточнить")
+    salary = r.get("normalized_compensation", {}).get("monthly_czk")
+    compensation = (f"≈ {salary[0]:,.0f}–{salary[1]:,.0f} CZK gross/мес." if salary else
+                    ("не подтверждена" if r.get("compensation_fit") == "UNKNOWN"
+                     else short(r.get("compensation_summary", "не указана"), 170)))
+    parts = [f"{job.company} — {job.title}", verdict,
+             f"{job.location} · {feasibility}", "Подходит:"]
+    parts += ["• " + short(x, 200) for x in r.get("why_it_fits", [])[:2]]
+    if r.get("gaps"):
+        parts.append("Уточнить: " + short("; ".join(r["gaps"][:2]), 280))
+    parts += ["Зарплата: " + compensation, job.official_url or job.canonical_url]
+    return "\n".join(parts)[:1800]
 
 
 def summary(session):
@@ -114,6 +108,7 @@ def manual_digest_text(count, notion_problem):
 
 
 def build_queue(factory, settings, preferences, slot):
+    preferences = runtime_preferences(factory, settings)
     with transaction_lock(factory, "digest:" + str(settings.telegram_chat_id)) as session:
         if session is None:
             return
@@ -155,27 +150,14 @@ def build_queue(factory, settings, preferences, slot):
                 Evaluation.model == settings.openai_model,
             )
         ).all()
-        all_evaluations = session.execute(
-            select(Version.job_id, Evaluation.result)
-            .join(Evaluation, Evaluation.version_id == Version.id)
-            .order_by(Evaluation.created_at)
-        ).all()
-        tracks = {job_id: result["track"] for job_id, result in all_evaluations}
-        boosts = {
-            track: feedback_boost(session, settings.telegram_user_id, track, tracks)
-            for track in set(tracks.values())
-        }
         blocked = blocked_job_ids(session, settings.telegram_user_id)
         notion_problem = freshness_problem(session, settings)
-        outcome_boosts = outcome_report(session, settings)["adjustments"]
         employment_order = {"employee": 3, "eor": 2, "unknown": 1, "contractor": 0}
         rows.sort(
             key=lambda x: (
                 x[2].score // 10,
                 employment_order[x[2].result["employment_model"]],
-                x[2].score
-                + boosts.get(x[2].result["track"], 0)
-                + outcome_boosts.get(x[2].result["track"], 0),
+                x[2].score,
             ),
             reverse=True,
         )
@@ -216,10 +198,11 @@ def build_queue(factory, settings, preferences, slot):
                     {"text": "Откликнулась", "callback_data": "applied:" + job.id},
                 ],
                 [
-                    {"text": "Почему показано", "callback_data": "why:" + job.id},
+                    {"text": "Почему подходит", "callback_data": "why:" + job.id},
                     {"text": "Открыть", "url": job.canonical_url},
                 ],
             ]
+            buttons.append([{"text": "Комментарий", "callback_data": "comment:" + job.id}])
             session.add(
                 Delivery(
                     chat_id=chat,

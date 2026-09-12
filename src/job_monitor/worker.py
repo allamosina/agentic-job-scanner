@@ -12,6 +12,7 @@ from .config import Source, fingerprint, load_preferences, load_profile, load_so
 from .db import transaction_lock
 from .evaluation import assess
 from .models import Evaluation, Job, Observation, Run, State, Version, utcnow
+from .preferences import runtime_preferences
 from .research import company_research, discover, find_signals, official_job
 from .sources import Web, fetch_source
 from .store import BudgetUnavailable, save_job
@@ -136,18 +137,23 @@ async def evaluate_pending(factory, settings, preferences, web):
                     Evaluation.policy_hash == policy_hash,
                     Evaluation.profile_hash == profile_hash,
                     Evaluation.model == settings.openai_model,
-                    Evaluation.created_at
-                    >= utcnow() - timedelta(hours=preferences.operations.research_ttl_hours),
                 )
             )
         )
         pending = [
             (job, version) for job, version in rows if version.id not in known and job.id not in blocked
         ]
-    pending.sort(key=lambda pair: (discovery_priority(pair[0].title), pair[0].first_seen))
+    with factory() as session:
+        cooldown = {}
+        for job, version in pending:
+            attempt = session.get(State, "evaluation_retry:" + version.id)
+            if attempt:
+                cooldown[version.id] = attempt.value.get("after", "")
+    ready = [pair for pair in pending if cooldown.get(pair[1].id, "") <= utcnow().isoformat()]
+    ready.sort(key=lambda pair: (discovery_priority(pair[0].title), pair[0].first_seen))
     completed, failed = 0, 0
     evaluation_state = "complete"
-    for job, version in pending[: preferences.operations.max_evaluations_per_run]:
+    for job, version in ready[: preferences.operations.max_evaluations_per_run]:
         research = []
         try:
             research = await company_research(
@@ -176,9 +182,12 @@ async def evaluate_pending(factory, settings, preferences, web):
             break
         except Exception as exc:
             failed += 1
+            with factory.begin() as session:
+                session.merge(State(key="evaluation_retry:" + version.id,
+                    value={"after": (utcnow() + timedelta(minutes=30)).isoformat()}))
             log.warning("evaluation deferred job=%s error=%s", job.id, type(exc).__name__)
     return {"evaluated": completed, "evaluation_errors": failed, "pending_before_run": len(pending),
-            "evaluation_state": evaluation_state}
+            "evaluation_state": evaluation_state, "remaining": len(pending) - completed}
 
 
 def watchlist_sources(preferences, configured):
@@ -204,8 +213,8 @@ def watchlist_sources(preferences, configured):
     ]
 
 
-async def scan(factory, settings, force=False):
-    preferences = load_preferences(settings)
+async def collect_jobs(factory, settings, force=False):
+    preferences = runtime_preferences(factory, settings)
     notion = await sync_notion(factory, settings)
     with transaction_lock(factory, "scan") as guard:
         if guard is None:
@@ -260,40 +269,45 @@ async def scan(factory, settings, force=False):
                     session.merge(
                         State(key="search_cursor", value={"index": cursor + max(1, attempted_searches)})
                     )
-                totals.update(await evaluate_pending(factory, settings, preferences, web))
-                if settings.paid_apis_enabled:
-                    companies = list(
-                        dict.fromkeys(
-                            c
-                            for values in preferences.watchlists.values()
-                            for c in values
-                            if not c.lower().startswith("other ")
-                        )
-                    )
-                    with factory() as session:
-                        state = session.get(State, "outbound_cursor")
-                        start = state.value.get("index", 0) if state else 0
-                    totals["outbound_signals"] = 0
-                    for i in range(preferences.operations.outbound_companies_per_run):
-                        if not companies:
-                            break
-                        company = companies[(start + i) % len(companies)]
-                        try:
-                            totals["outbound_signals"] += await find_signals(
-                                factory, settings, web, preferences, company
-                            )
-                        except BudgetUnavailable:
-                            break
-                        except Exception as exc:
-                            log.warning("outbound deferred: %s", type(exc).__name__)
-                        finally:
-                            with factory.begin() as session:
-                                session.merge(State(key="outbound_cursor", value={"index": start + i + 1}))
         except TimeoutError:
             totals["state"] = "deadline_reached_partial"
         finally:
             await web.close()
     return totals
+
+
+async def evaluate_queue(factory, settings):
+    """Drain persisted unevaluated versions, independently of collection's deadline."""
+    with transaction_lock(factory, "evaluation_queue") as guard:
+        if guard is None:
+            return {"evaluation_state": "already_running"}
+        prefs = runtime_preferences(factory, settings)
+        web = Web()
+        totals = {"evaluated": 0, "evaluation_errors": 0}
+        try:
+            async with asyncio.timeout(prefs.operations.scan_timeout_seconds):
+                while True:
+                    result = await evaluate_pending(factory, settings, prefs, web)
+                    totals["evaluated"] += result.get("evaluated", 0)
+                    totals["evaluation_errors"] += result.get("evaluation_errors", 0)
+                    totals["evaluation_state"] = result.get("evaluation_state", "complete")
+                    totals["remaining"] = result.get("remaining", 0)
+                    if (totals["evaluation_state"] != "complete" or not result.get("evaluated")
+                            or not result.get("remaining")):
+                        break
+        except TimeoutError:
+            totals["evaluation_state"] = "deadline_reached_partial"
+        finally:
+            await web.close()
+        return totals
+
+
+async def scan(factory, settings, force=False):
+    collected = await collect_jobs(factory, settings, force)
+    if collected.get("state") == "already_running":
+        return collected
+    # Collection timing out must not prevent evaluation of jobs already stored.
+    return {**collected, **await evaluate_queue(factory, settings)}
 
 
 async def outbound_scan(factory, settings, company):

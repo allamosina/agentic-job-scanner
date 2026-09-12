@@ -1,12 +1,12 @@
 import logging
 
 from sqlalchemy import select
-from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import BotCommand, ForceReply, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
 from .applications import report_text, sync_notion
 from .config import load_preferences, load_profile
-from .delivery import build_queue, dispatch, slot_now, summary
+from .delivery import build_queue, dispatch, summary
 from .models import Delivery, Evaluation, Feedback, Job, State, Version, utcnow
 from .sources import Web
 from .store import feedback_summary
@@ -22,6 +22,8 @@ REASONS = {
 }
 
 BOT_COMMANDS = [
+    ("rules", "Подтверждённые правила поиска"),
+    ("rule", "Предложить правило: /rule текст"),
     ("jobs", "Получить новые подходящие вакансии сейчас"),
     ("scan", "Запустить поиск и прислать подборку"),
     ("status", "Технический статус"),
@@ -49,12 +51,13 @@ def build_bot(factory, settings):
         if not authorized(update):
             return
         await update.message.reply_text(
-            "Монитор вакансий. Подборки в 08:00, 13:00 и 18:00 по Праге.\n"
+            "Монитор вакансий. Поиск раз в день в 08:00 по Праге; подборка после оценки.\n"
             "/jobs — прислать новые подходящие вакансии сейчас\n"
             "/scan — запустить поиск и прислать подборку (использует лимит API)\n"
             "/status — источники и очередь\n/preferences — правила и реакции\n/saved — сохранённые\n"
             "/pause и /resume — рассылки\n/reset_learning — сброс влияния реакций\n"
             "/apps — Notion: этапы откликов и результаты\n"
+            "/rule текст — новое правило с подтверждением; /rules — список правил\n"
             "Комментарий к вакансии можно отправить ответом на её карточку."
         )
 
@@ -165,12 +168,11 @@ def build_bot(factory, settings):
             ratings = feedback_summary(session, settings.telegram_user_id)
         await update.message.reply_text(
             f"Правила: приватная конфигурация, версия {prefs.version}.\n"
-            f"Расписание: {', '.join(prefs.schedule.delivery_times)} {prefs.schedule.timezone}.\n"
+            "Поиск: ежедневно в 08:00 Europe/Prague, затем оценка и подборка.\n"
             f"Основной профиль: {load_profile(settings).get('canonical_document', 'не задан')}.\n"
             f"Категории gross base CZK/месяц: HIGH ≥ {prefs.compensation_czk['high_min']}, "
             f"MEDIUM ≥ {prefs.compensation_czk['medium_min']}; ниже LOW. UNKNOWN допустим.\n"
-            f"Активных оценок интереса: {len(ratings)}. Реакции меняют порядок внутри подходящих групп, "
-            "но не факты CV и не обязательные ограничения."
+            f"Сохранённых оценок интереса: {len(ratings)}. Общие правила меняются только после подтверждения."
         )
 
     async def toggle(update, context):
@@ -211,12 +213,23 @@ def build_bot(factory, settings):
         if not authorized(update):
             await query.answer()
             return
-        parts = (query.data or "").split(":")
+        data = query.data or ""
+        if data.startswith(("ruleyes:", "ruleno:", "ruledelete:")):
+            action, ident = data.split(":", 1)
+            with factory.begin() as session:
+                row = session.get(State, f"rule:{settings.telegram_user_id}:{ident}")
+                if row and (row.value.get("status") == "pending" or action == "ruledelete"):
+                    row.value = {**row.value, "status": "approved" if action == "ruleyes" else "removed"}
+            await query.answer()
+            await query.edit_message_reply_markup(None)
+            await query.message.reply_text("Правило подтверждено." if action == "ruleyes" else "Правило отменено.")
+            return
+        parts = data.split(":")
         if len(parts) != 2:
             await query.answer()
             return
         action, job_id = parts
-        if action not in {"like", "dislike", "save", "applied", "why", *REASONS.keys()}:
+        if action not in {"like", "dislike", "save", "applied", "why", "comment", *REASONS.keys()}:
             await query.answer()
             return
         with factory.begin() as session:
@@ -233,7 +246,9 @@ def build_bot(factory, settings):
             if not job or not delivery:
                 await query.answer("Карточка не найдена.")
                 return
-            if action == "why":
+            if action == "comment":
+                title = f"{job.company} — {job.title}"
+            elif action == "why":
                 evaluation = session.get(Evaluation, delivery.evaluation_id)
                 r = evaluation.result
                 message = "\n".join(
@@ -260,6 +275,19 @@ def build_bot(factory, settings):
                             reason=action if action in REASONS else None,
                         )
                     )
+        if action == "comment":
+            await query.answer()
+            prompt = await query.message.reply_text(
+                f"Что тебе нравится или не подходит в вакансии {title}? "
+                "Напиши своими словами. Это отзыв об этой вакансии; общее правило можно отдельно добавить через /rule.",
+                reply_markup=ForceReply(selective=True),
+            )
+            with factory.begin() as session:
+                session.merge(State(key=f"comment_prompt:{settings.telegram_chat_id}:{prompt.message_id}",
+                                    value={"job_id": job_id}))
+                session.merge(State(key=f"comment_pending:{settings.telegram_user_id}",
+                                    value={"job_id": job_id, "at": utcnow().isoformat()}))
+            return
         await query.answer("Сохранено" if action != "why" else None)
         if action == "why":
             await query.message.reply_text(message[:4000])
@@ -269,49 +297,96 @@ def build_bot(factory, settings):
             )
             await query.edit_message_reply_markup(markup)
         if action == "dislike":
-            markup = InlineKeyboardMarkup(
-                [
-                    [InlineKeyboardButton(title, callback_data=f"{key}:{job_id}")]
-                    for key, title in REASONS.items()
-                ]
+            await query.message.reply_text(
+                "Отметила. Если хочешь объяснить почему, нажми «Комментарий» на карточке."
             )
-            # Keep reason buttons on the original persisted card; comments can reply to it too.
-            await query.edit_message_reply_markup(markup)
+
+    async def rule(update, context):
+        if not authorized(update):
+            return
+        text = update.message.text.partition(" ")[2].strip()
+        if not text or len(text) > 3000:
+            await update.message.reply_text("Напиши /rule и точное правило для будущих вакансий (до 3000 символов).")
+            return
+        ident = str(update.message.message_id)
+        with factory.begin() as session:
+            session.merge(State(key=f"rule:{settings.telegram_user_id}:{ident}",
+                                value={"text": text, "status": "pending"}))
+        await update.message.reply_text("Применять ко всем будущим вакансиям?\n\n" + text,
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("Подтвердить", callback_data="ruleyes:" + ident),
+                InlineKeyboardButton("Отменить", callback_data="ruleno:" + ident),
+            ]]))
+
+    async def rules(update, context):
+        if not authorized(update):
+            return
+        from .preferences import approved_rules
+
+        with factory() as session:
+            rows = approved_rules(session, settings.telegram_user_id)
+        if not rows:
+            await update.message.reply_text("Дополнительных подтверждённых правил пока нет. Добавить: /rule текст")
+        for row in rows:
+            await update.message.reply_text(row.value["text"], reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("Удалить правило", callback_data="ruledelete:" + row.key.rsplit(":", 1)[1])
+            ]]))
 
     async def comment(update, context):
-        if not authorized(update) or not update.message.reply_to_message:
+        if not authorized(update):
+            return
+        if len(update.message.text) > 4000:
+            await update.message.reply_text("Пожалуйста, сократи отзыв до 4000 символов — так он сохранится целиком.")
             return
         with factory.begin() as session:
-            delivery = session.scalar(
-                select(Delivery).where(
-                    Delivery.chat_id == str(settings.telegram_chat_id),
-                    Delivery.message_id == update.message.reply_to_message.message_id,
+            job_id = None
+            reply = update.message.reply_to_message
+            if reply:
+                prompt = session.get(State, f"comment_prompt:{settings.telegram_chat_id}:{reply.message_id}")
+                if prompt:
+                    job_id = prompt.value["job_id"]
+                else:
+                    item = session.scalar(select(Delivery).where(
+                        Delivery.chat_id == str(settings.telegram_chat_id), Delivery.message_id == reply.message_id))
+                    if item and item.version_id:
+                        job_id = session.get(Version, item.version_id).job_id
+            else:
+                pending = session.get(State, f"comment_pending:{settings.telegram_user_id}")
+                if pending:
+                    from datetime import timedelta
+
+                    if pending.value.get("at", "") >= (utcnow() - timedelta(hours=24)).isoformat():
+                        job_id = pending.value.get("job_id")
+            if not job_id:
+                await update.message.reply_text(
+                    "Чтобы привязать отзыв к вакансии, нажми «Комментарий» на её карточке "
+                    "или ответь на карточку. Общее правило: /rule текст."
                 )
-            )
-            if not delivery or not delivery.version_id:
                 return
             key = f"message:{settings.telegram_chat_id}:{update.message.message_id}"
             if not session.scalar(select(Feedback).where(Feedback.event_key == key)):
-                version = session.get(Version, delivery.version_id)
-                session.add(
-                    Feedback(
-                        event_key=key,
-                        user_id=str(settings.telegram_user_id),
-                        job_id=version.job_id,
-                        action="comment",
-                        comment=update.message.text[:4000],
-                    )
-                )
+                session.add(Feedback(event_key=key, user_id=str(settings.telegram_user_id),
+                                     job_id=job_id, action="comment", comment=update.message.text))
+            pending = session.get(State, f"comment_pending:{settings.telegram_user_id}")
+            if pending and pending.value.get("job_id") == job_id:
+                session.delete(pending)
         await update.message.reply_text(
-            "Комментарий сохранён. Он не изменяет исходные правила автоматически."
+            "Отзыв сохранён дословно к этой вакансии. Общие правила не изменены. "
+            "Если хочешь учитывать это в будущем, напиши /rule и сформулируй правило."
         )
+
+    async def daily_tick(context):
+        if context.application.bot_data.get("manual_busy"):
+            return
+        from .scheduler import daily_cycle
+
+        try:
+            await daily_cycle(factory, settings, context.bot, context.application.bot_data["web"])
+        except Exception as exc:
+            log.error("daily search failed: %s", type(exc).__name__)
 
     async def tick(context):
         try:
-            prefs = load_preferences(settings)
-            slot = slot_now(utcnow(), prefs.schedule)
-            if slot:
-                build_queue(factory, settings, prefs, slot)
             with factory() as session:
                 paused = session.get(State, "paused")
                 if paused and paused.value.get("enabled"):
@@ -326,6 +401,9 @@ def build_bot(factory, settings):
             await application.bot.set_my_commands([BotCommand(name, text) for name, text in BOT_COMMANDS])
         except Exception as exc:
             log.warning("Telegram command menu unavailable: %s", type(exc).__name__)
+        application.job_queue.run_repeating(
+            daily_tick, interval=60, first=5, job_kwargs={"max_instances": 1, "coalesce": True}
+        )
         # Daily local-date gate is persisted in PostgreSQL; restarts do not re-import repeatedly.
         # The scan worker shares this lock/gate. Failed attempts retry at most every 30 min.
         application.job_queue.run_repeating(
@@ -350,6 +428,8 @@ def build_bot(factory, settings):
     )
     for name, handler in [
         ("start", start),
+        ("rule", rule),
+        ("rules", rules),
         ("jobs", request_jobs),
         ("scan", request_jobs),
         ("status", status),

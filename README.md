@@ -1,13 +1,13 @@
 # Agentic Job Scanner
 
-A personal job monitoring service built with Python, PostgreSQL, Telegram and optional LLM-assisted evaluation. It collects public vacancies, checks responsibilities against candidate evidence, explains fit, and learns cautiously from explicit feedback and application outcomes.
+A personal job monitoring service built with Python, PostgreSQL, Telegram and optional LLM-assisted evaluation. It collects public vacancies, checks responsibilities against candidate evidence, explains fit, and uses only explicitly confirmed user rules for future recommendations.
 
 ## Capabilities
 
 - Public Greenhouse, Lever and Ashby connectors, limited JobPosting JSON-LD collection, optional Brave discovery.
 - Versioned vacancies, source provenance, evidence-based structured assessments and configurable salary bands.
 - Telegram digests, feedback buttons, saved jobs and explanations; access restricted to a configured user and chat.
-- Read-only daily Notion application sync, exact application matching, observed stage history and bounded outcome adjustments.
+- Read-only daily Notion application sync, exact application matching, observed stage history (without automatic ranking adjustments).
 - PostgreSQL migrations, API call caps, source health reporting, deduplicated delivery and retry handling.
 
 The checked-in configs are **synthetic examples**. They are not the author's CV, salary expectations, company watchlists or application history. The service refuses CLI bot/scan/outbound/Notion-sync startup without private configuration.
@@ -52,13 +52,18 @@ Telegram commands: `/jobs` sends new eligible cards immediately using the existi
 
 ## Railway
 
-Connect this repository to a Railway project. Use PostgreSQL in Railway or an external PostgreSQL provider; both services must share the same database and private configuration.
+Use one always-on bot service plus PostgreSQL in the same Railway project. The bot runs collection once daily at 08:00 Europe/Prague, then drains the persisted evaluation queue and sends one digest if there are useful results. On a restart after 08:00 it catches up if today's run was missed. Daily state and locks live in PostgreSQL. No cron scanner service is required; disable any legacy scanner cron to avoid duplicate collection.
 
-1. Set `DATABASE_URL`, `PRIVATE_CONFIG_JSON`, Telegram IDs/token, and optional provider keys in Railway Variables. The repository contains no deployable personal configuration.
-2. Run `job-monitor migrate` before starting the services.
-3. Bot service: `job-monitor bot`; keep one running replica and disable sleeping. `railway.toml` describes this service.
-4. Scanner service: override command to `job-monitor scan --scheduled`, configure cron and disable restart-on-exit for the cron service. For the example 08:00/13:00/18:00 Europe/Prague schedule, UTC cron `30 5,6,10,11,15,16 * * *` covers winter/summer preparation windows. The command checks the configured local window and exits on extra runs. Other schedules need corresponding cron changes.
-5. Enable paid APIs only after setting a model and nonzero call caps. Start the Telegram conversation with `/start`; verify one scan, Notion sync and digest before relying on the service.
+1. Set `DATABASE_URL`, private JSON (whole or numbered parts), Telegram token/IDs, and optional provider keys in Variables.
+2. Pre-deploy command: `job-monitor migrate`. Start command: `job-monitor bot`. Keep one replica and disable sleeping.
+3. Enable paid APIs after setting the model and daily call caps. `/scan` runs collection and evaluation manually; `/jobs` sends eligible existing cards.
+4. Existing private bundles are migrated on read to the agreed 08:00 Prague schedule. No recopy of private configuration is necessary.
+
+Collection and evaluation have independent deadlines. Saved job versions form the durable evaluation queue; unchanged versions already evaluated under the same profile, rules and model are not re-evaluated merely because a week passed. Failed evaluations receive a 30-minute cooldown; daily processing resumes remaining work later that day. Budget exhaustion defers the remainder to the next daily run and sends one explanatory notice. Live vacancy checks still run before delivery. Technical reports remain available only through `/status`.
+
+The `job-monitor collect` and `job-monitor evaluate` CLI commands can run either stage independently. `job-monitor scan` runs both stages; collection timing out does not cancel subsequent evaluation.
+
+Feedback: use the Comment button or reply directly to a card; the original text is stored against that job. No rule is inferred from comments, reactions, missing reactions or application outcomes. `/rule text` proposes a global preference; only confirmation activates it, and `/rules` lists/removes explicit rules. Outcomes remain available as history, but do not boost recommendation ranking. Confirmed rules are included in model assessment policy and its cache fingerprint, without modifying CV facts.
 
 Notion setup: [NOTION.md](NOTION.md). No deployment is performed merely by cloning the repository. Provider cost limits should be set separately; call-count caps are not dollar budgets.
 

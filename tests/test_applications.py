@@ -279,7 +279,7 @@ async def test_applied_after_queue_is_not_sent(
 
     bot = Bot()
     await dispatch(factory, bot, Web(), settings)
-    assert len(bot.messages) == 1
+    assert len(bot.messages) == 0  # Scheduled diagnostic reports are suppressed.
     with factory() as session:
         assert (
             session.scalar(select(Delivery.status).where(Delivery.version_id.is_not(None)))
@@ -296,7 +296,7 @@ def test_stale_notion_defers_queue(factory, settings, preferences, job_data, ass
             session.scalar(select(func.count()).select_from(Delivery).where(Delivery.version_id.is_not(None)))
             == 0
         )
-        assert "Notion" in session.scalar(select(Delivery.body))
+        assert session.scalar(select(Delivery.status)) == "suppressed"
     config = load_notion(settings)
     with factory.begin() as session:
         session.merge(

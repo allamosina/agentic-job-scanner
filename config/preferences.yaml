@@ -4,8 +4,6 @@ schedule:
   timezone: Europe/Prague
   delivery_times:
   - 08:00
-  - '13:00'
-  - '18:00'
 policy_text: DEMONSTRATION ONLY. Fictional web project manager looking for website
   delivery roles. Assess evidence against responsibilities; do not invent experience.
 clarifications_text: Synthetic example, not a real candidate or job search.

@@ -177,7 +177,10 @@ def load_profile(settings: Settings):
 
 
 def load_preferences(settings: Settings) -> Preferences:
-    return Preferences.model_validate(config_section(settings, "preferences", settings.config_path))
+    prefs = Preferences.model_validate(config_section(settings, "preferences", settings.config_path))
+    # Migrate existing Railway bundles without requiring the user to recopy private JSON.
+    prefs.schedule = Schedule(timezone="Europe/Prague", delivery_times=["08:00"])
+    return prefs
 
 
 def fingerprint(value) -> str:
