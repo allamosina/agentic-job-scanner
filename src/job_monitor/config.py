@@ -92,6 +92,7 @@ class Source(Strict):
 
 
 class Settings(Strict):
+    private_search_config_json: str = Field(default="", repr=False)
     private_config_json: str = Field(default="", repr=False)
     private_config_json_1: str = Field(default="", repr=False)
     private_config_json_2: str = Field(default="", repr=False)
@@ -178,6 +179,14 @@ def load_profile(settings: Settings):
 
 def load_preferences(settings: Settings) -> Preferences:
     prefs = Preferences.model_validate(config_section(settings, "preferences", settings.config_path))
+    update = load_search_config(settings)
+    if update:
+        prefs.watchlists = update.watchlists
+        # New explicit search instructions supersede older calibration comments,
+        # without changing candidate evidence or compensation settings.
+        addition = "\nLatest explicit search preferences (supersede conflicting older preferences):\n" + update.policy_text
+        prefs.policy_text += addition
+        prefs.clarifications_text += addition
     # Migrate existing Railway bundles without requiring the user to recopy private JSON.
     prefs.schedule = Schedule(timezone="Europe/Prague", delivery_times=["08:00"])
     return prefs
@@ -196,4 +205,26 @@ def load_sources(settings: Settings) -> list[Source]:
     ]
     if len({s.id for s in sources}) != len(sources):
         raise ValueError("Duplicate source IDs")
+    update = load_search_config(settings)
+    if update:
+        if len({s.id for s in update.sources}) != len(update.sources):
+            raise ValueError("Duplicate source IDs")
+        existing = {s.id: s for s in sources}
+        existing.update({s.id: s for s in update.sources})
+        sources = list(existing.values())
     return sources
+
+
+class SearchConfig(Strict):
+    watchlists: dict[str, list[str]]
+    policy_text: str = Field(min_length=1)
+    sources: list[Source] = Field(default_factory=list)
+
+
+def load_search_config(settings: Settings) -> SearchConfig | None:
+    if not settings.private_search_config_json:
+        return None
+    try:
+        return SearchConfig.model_validate_json(settings.private_search_config_json)
+    except ValueError:
+        raise PrivateConfigError("invalid_search_config") from None

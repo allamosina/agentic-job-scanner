@@ -59,6 +59,18 @@ Use one always-on bot service plus PostgreSQL in the same Railway project. The b
 3. Enable paid APIs after setting the model and daily call caps. `/scan` runs collection and evaluation manually; `/jobs` sends eligible existing cards.
 4. Existing private bundles are migrated on read to the agreed 08:00 Prague schedule. No recopy of private configuration is necessary.
 
+For a compact search-only update, set `PRIVATE_SEARCH_CONFIG_JSON` to a private JSON object with
+`watchlists` (an object of named company lists), `policy_text` (the latest explicit search rules),
+and optional `sources` (the same source schema as the main bundle). This replaces the watchlists,
+appends the rules to both policy and clarifications, and merges sources by ID. CV evidence, salary
+bands, API budgets and application history stay in their existing configuration/storage. Remove
+the variable to restore the original search preferences. Never commit a populated value.
+
+Companies without configured ATS coverage enter the existing rotating Brave search queue;
+JSON-LD sources retain search fallback because a bounded crawl may miss vacancies. This does not
+guarantee every company is searched every day. Existing search credentials, caps and timeouts apply.
+Employer interest is not evidence of company quality, pay, culture or country eligibility.
+
 Collection and evaluation have independent deadlines. Saved job versions form the durable evaluation queue; unchanged versions already evaluated under the same profile, rules and model are not re-evaluated merely because a week passed. Failed evaluations receive a 30-minute cooldown; daily processing resumes remaining work later that day. Budget exhaustion defers the remainder to the next daily run and sends one explanatory notice. Live vacancy checks still run before delivery. Technical reports remain available only through `/status`.
 
 The `job-monitor collect` and `job-monitor evaluate` CLI commands can run either stage independently. `job-monitor scan` runs both stages; collection timing out does not cancel subsequent evaluation.

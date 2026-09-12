@@ -191,21 +191,22 @@ async def evaluate_pending(factory, settings, preferences, web):
 
 
 def watchlist_sources(preferences, configured):
-    monitored = {s.company.casefold() for s in configured if s.company and s.enabled}
+    # A bounded JSON-LD crawl can miss an entire board. Keep search fallback.
+    monitored = {s.company.casefold() for s in configured
+                 if s.company and s.enabled and s.kind != "jsonld"}
     companies = list(
-        dict.fromkeys(
-            c
+        {c.casefold(): c
             for values in preferences.watchlists.values()
             for c in values
             if not c.lower().startswith("other ")
-        )
+        }.values()
     )
     return [
         Source(
             id="watch-" + fingerprint(company)[:12],
             kind="search",
             company=company,
-            query=f'"{company}" careers jobs (web OR marketing OR product OR digital)',
+            query=f'"{company}" careers jobs (web OR marketing OR product OR digital OR strategy OR experimentation)',
             tier="1",
         )
         for company in companies

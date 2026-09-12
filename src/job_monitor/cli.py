@@ -232,6 +232,7 @@ def run():
             "conflicting_variables": "Remove PRIVATE_CONFIG_JSON when using PRIVATE_CONFIG_JSON_1, _2, etc.",
             "missing_part": "Private JSON parts must start at _1 with no gaps in numbering.",
             "invalid_json": "Private JSON is incomplete or malformed. Recopy every part without added text.",
+            "invalid_search_config": "PRIVATE_SEARCH_CONFIG_JSON must contain watchlists, policy_text and optional sources.",
             "invalid_sections": "Private JSON must contain preferences, candidate, sources and notion objects.",
             "unreadable_file": "PRIVATE_CONFIG_PATH cannot be read. On Railway use the JSON variables instead.",
         }
