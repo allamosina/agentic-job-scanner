@@ -71,7 +71,7 @@ JSON-LD sources retain search fallback because a bounded crawl may miss vacancie
 guarantee every company is searched every day. Existing search credentials, caps and timeouts apply.
 Employer interest is not evidence of company quality, pay, culture or country eligibility.
 
-Collection and evaluation have independent deadlines. Saved job versions form the durable evaluation queue; unchanged versions already evaluated under the same profile, rules and model are not re-evaluated merely because a week passed. Failed evaluations receive a 30-minute cooldown; daily processing resumes remaining work later that day. Budget exhaustion defers the remainder to the next daily run and sends one explanatory notice. Live vacancy checks still run before delivery. Technical reports remain available only through `/status`.
+Collection and evaluation have independent deadlines. Saved job versions form the durable evaluation queue; unchanged versions already evaluated under the same profile, rules and model are not re-evaluated merely because a week passed. Failed evaluations receive a 30-minute cooldown; daily processing resumes remaining work later that day. A vacancy that fails three times in a day is skipped until the next day (or a profile, rules or model change), so it cannot hold back the digest. Budget exhaustion defers the remainder to the next daily run and sends one explanatory notice. Live vacancy checks still run before delivery. Technical reports remain available only through `/status`.
 
 The `job-monitor collect` and `job-monitor evaluate` CLI commands can run either stage independently. `job-monitor scan` runs both stages; collection timing out does not cancel subsequent evaluation.
 

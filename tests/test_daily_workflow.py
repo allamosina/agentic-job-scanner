@@ -163,3 +163,57 @@ def test_card_is_short_and_does_not_show_score_or_duplicate_links(assessment):
     assert '64/100' not in text
     assert text.count('https://example.com/job') == 1
     assert 'CORE_WEB' not in text
+
+
+@pytest.mark.parametrize('score', [95, 85, 75, 65])
+def test_card_verdict_matches_evaluation_category(assessment, score):
+    from job_monitor.delivery import card
+    from job_monitor.evaluation import classify
+
+    job = SimpleNamespace(company='Example', title='Website Manager', location='Czechia',
+                          official_url='https://example.com/job', canonical_url='https://example.com/job')
+    text = card(job, SimpleNamespace(payload={}),
+                SimpleNamespace(result=assessment.model_dump(), category=classify(score), score=score))
+    assert text.splitlines()[1] != 'Можно рассмотреть'
+
+
+async def test_persistently_failing_evaluation_does_not_block_daily_digest(db, monkeypatch, job_data):
+    from datetime import timedelta
+
+    from job_monitor import compensation
+    from job_monitor.store import save_job
+
+    settings = Settings(telegram_user_id=123, telegram_chat_id=123, openai_model='test',
+                        openai_api_key='synthetic', paid_apis_enabled=True)
+    with db.begin() as session:
+        save_job(session, job_data)
+    clock = [datetime.fromisoformat('2026-09-12T06:05:00+00:00')]
+    monkeypatch.setattr(worker, 'utcnow', lambda: clock[0])
+
+    @contextmanager
+    def lock(factory, key):
+        with factory.begin() as session:
+            yield session
+
+    monkeypatch.setattr(worker, 'transaction_lock', lock)
+    monkeypatch.setattr(scheduler, 'collect_jobs', AsyncMock(return_value={'new': 1}))
+    assess = AsyncMock(side_effect=ValueError('synthetic validation failure'))
+    monkeypatch.setattr(worker, 'assess', assess)
+    monkeypatch.setattr(worker, 'company_research', AsyncMock(return_value=[]))
+    monkeypatch.setattr(compensation, 'exchange_rates', AsyncMock(return_value=None))
+    queue = Mock()
+    monkeypatch.setattr(scheduler, 'build_queue', queue)
+    monkeypatch.setattr(scheduler, 'dispatch', AsyncMock())
+
+    for _ in range(worker.MAX_EVALUATION_ATTEMPTS + 2):
+        await scheduler.daily_cycle(db, settings, None, None, now=clock[0])
+        clock[0] += timedelta(minutes=31)
+    assert assess.await_count == worker.MAX_EVALUATION_ATTEMPTS
+    queue.assert_called_once()
+
+    # A new day gives the vacancy fresh attempts.
+    clock[0] += timedelta(days=1)
+    prefs = load_preferences(settings)
+    result = await worker.evaluate_pending(db, settings, prefs, None)
+    assert result['evaluation_errors'] == 1
+    assert assess.await_count == worker.MAX_EVALUATION_ATTEMPTS + 1

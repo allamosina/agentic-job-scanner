@@ -18,6 +18,16 @@ from .sources import Web, fetch_source
 from .store import BudgetUnavailable, save_job
 
 log = logging.getLogger(__name__)
+# Failed evaluations retry after a cooldown, but at most this many times per UTC day and
+# evaluation fingerprint, so one persistently failing vacancy cannot hold back the digest.
+MAX_EVALUATION_ATTEMPTS = 3
+
+
+def failed_attempts(state, day, key):
+    value = state.value if state else {}
+    if value.get("day") != day or value.get("key") != key:
+        return 0
+    return value.get("attempts", 0)
 
 
 def source_due(factory, source, hours):
@@ -143,12 +153,19 @@ async def evaluate_pending(factory, settings, preferences, web):
         pending = [
             (job, version) for job, version in rows if version.id not in known and job.id not in blocked
         ]
+    retry_key = fingerprint([policy_hash, profile_hash, settings.openai_model])
+    today = utcnow().date().isoformat()
     with factory() as session:
-        cooldown = {}
+        cooldown, exhausted = {}, set()
         for job, version in pending:
             attempt = session.get(State, "evaluation_retry:" + version.id)
-            if attempt:
+            attempts = failed_attempts(attempt, today, retry_key)
+            if attempts >= MAX_EVALUATION_ATTEMPTS:
+                exhausted.add(version.id)
+            elif attempts:
                 cooldown[version.id] = attempt.value.get("after", "")
+    # Exhausted versions don't count as remaining work; they get fresh attempts tomorrow.
+    pending = [pair for pair in pending if pair[1].id not in exhausted]
     ready = [pair for pair in pending if cooldown.get(pair[1].id, "") <= utcnow().isoformat()]
     ready.sort(key=lambda pair: (discovery_priority(pair[0].title), pair[0].first_seen))
     completed, failed = 0, 0
@@ -183,11 +200,15 @@ async def evaluate_pending(factory, settings, preferences, web):
         except Exception as exc:
             failed += 1
             with factory.begin() as session:
-                session.merge(State(key="evaluation_retry:" + version.id,
-                    value={"after": (utcnow() + timedelta(minutes=30)).isoformat()}))
+                key = "evaluation_retry:" + version.id
+                attempts = failed_attempts(session.get(State, key), today, retry_key) + 1
+                session.merge(State(key=key, value={
+                    "after": (utcnow() + timedelta(minutes=30)).isoformat(),
+                    "attempts": attempts, "day": today, "key": retry_key}))
             log.warning("evaluation deferred job=%s error=%s", job.id, type(exc).__name__)
     return {"evaluated": completed, "evaluation_errors": failed, "pending_before_run": len(pending),
-            "evaluation_state": evaluation_state, "remaining": len(pending) - completed}
+            "evaluation_state": evaluation_state, "remaining": len(pending) - completed,
+            "evaluation_skipped": len(exhausted)}
 
 
 def watchlist_sources(preferences, configured):
@@ -293,6 +314,7 @@ async def evaluate_queue(factory, settings):
                     totals["evaluation_errors"] += result.get("evaluation_errors", 0)
                     totals["evaluation_state"] = result.get("evaluation_state", "complete")
                     totals["remaining"] = result.get("remaining", 0)
+                    totals["evaluation_skipped"] = result.get("evaluation_skipped", 0)
                     if (totals["evaluation_state"] != "complete" or not result.get("evaluated")
                             or not result.get("remaining")):
                         break
