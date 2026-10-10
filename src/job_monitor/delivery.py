@@ -44,8 +44,9 @@ def card(job, version, evaluation):
         value = " ".join(str(value).split())
         return value if len(value) <= limit else value[:limit - 1].rsplit(" ", 1)[0] + "…"
 
-    verdict = {"HIGH": "Стоит рассмотреть", "MEDIUM": "Можно попробовать",
-               "STRETCH": "Возможен переход", "LOW": "Условное соответствие"}.get(
+    # Keys are the categories produced by evaluation.classify().
+    verdict = {"APPLY NOW": "Стоит откликнуться", "STRONG MATCH": "Стоит рассмотреть",
+               "REVIEW": "Можно попробовать", "STRETCH": "Возможен переход"}.get(
                    evaluation.category, "Можно рассмотреть")
     feasibility = {"CONFIRMED": "найм из Чехии подтверждён", "LIKELY": "найм из Чехии нужно уточнить",
                    "UNKNOWN": "найм из Чехии не подтверждён"}.get(
